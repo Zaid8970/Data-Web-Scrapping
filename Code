@@ -1,0 +1,197 @@
+import csv
+import pandas as pd
+import requests
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium import webdriver
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selectolax.parser import HTMLParser
+from fake_useragent import UserAgent
+import time
+import re
+
+OUTPUT_FILE_NAME = 'complete_data(above 50 Pages)' + '.csv'
+count = 1
+# Define regular expression patterns for state and postal code
+state_pattern = r'\b[A-Z]{2}\b'
+postal_code_pattern = r'\b\d{4}\b'
+States = ['qld', 'nsw', 'act', 'vic', 'tas', 'sa', 'wa', 'nt']
+
+
+def configure_driver():
+    # Add additional Options to the webdriver
+    chrome_options = Options()
+    ua = UserAgent()
+    userAgent = ua.random  # THIS IS FAKE AGENT IT WILL GIVE YOU NEW AGENT EVERYTIME
+    # print(userAgent)
+    # add the argument and make the browser Headless.
+    chrome_options.add_argument("--headless")  # if you don't want to see the display on chrome just uncomment this
+    chrome_options.add_argument(f'user-agent={userAgent}')  # useragent added
+    chrome_options.add_argument("--log-level=3")  # removes error/warning/info messages displayed on the console
+    chrome_options.add_argument("--disable-notifications")  # disable notifications
+    chrome_options.add_argument(
+        "--disable-infobars")  # disable infobars ""Chrome is being controlled by automated test software"  Although is isn't supported by Chrome anymore
+    chrome_options.add_argument("start-maximized")  # will  chrome screen
+    # chrome_options.add_argument('--disable-gpu')  # disable gmaximizepu (not load pictures fully)
+    chrome_options.add_argument("--disable-extensions")  # will disable developer mode extensions
+    # chrome_options.add_argument('--blink-settings=imagesEnabled=false')
+    # chrome_options.add_argument('--proxy-server=%s' % PROXY)
+    # chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9223")
+    # prefs = {"profile.managed_default_content_settings.images": 2}
+    # chrome_options.add_experimental_option("prefs", prefs)             #we have disabled pictures (so no time is wasted in loading them)
+
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),
+                              options=chrome_options)  # you don't have to download chromedriver it will be downloaded by itself and will be saved in cache
+    return driver
+
+
+def RunScrapper():
+    start_time = time.time()
+    count1 = 1
+    df = pd.read_excel('50 Pages Links.xlsx')
+    links = df['Links'].tolist()
+    # links = ['https://www.dlook.com.au/motels-and-hotels?page=']
+    # 2. Second Level Links
+    for link in links:
+        print("c", count1, "********************************")
+        # Crawl the page at the specific range
+        for i in range(1, 51):
+            driver.get(link + str(i))
+            # Check for the data  on the page
+            html_source = driver.page_source
+            root = HTMLParser(html_source)
+            checker = root.css_first("div[class = 'listings'] h3 + p")
+            # if error shows then this one will be run:
+            if checker:
+                print(checker.text())
+                break
+            # otherwise this one will be run:
+            else:
+                # Click on Phone Numbers
+                click_on_phone_numbers()
+                # Use Selectolax to parse the HTML
+                # Get the page source
+                html_source = driver.page_source
+                root = HTMLParser(html_source)
+                # Get the Links
+                Get_the_data(i, link, root)
+        count1 += 1
+    # give time taken to execute everything
+    print("time elapsed: {:.2f}s".format(time.time() - start_time))
+
+
+# Click on the Phone Numbers
+def click_on_phone_numbers():
+    phone_numbers = driver.find_elements(By.XPATH, value="//span[@class='business-phone-replace']")
+    for phone_number in phone_numbers:
+        # Execute JavaScript to click the button
+        driver.execute_script("arguments[0].click();", phone_number)
+    Phone_numbers = driver.find_elements(By.CSS_SELECTOR, value="li.listing__phone-no")
+    # Wait for all the Phone Numbers to visible
+    for Phone_number in Phone_numbers:
+        while True:
+            if "#" in Phone_number.text:
+                time.sleep(0.000000001)
+            else:
+                break
+
+
+# Get the Links
+def Get_the_data(i, link, root):
+    global count
+    # Get the Phone Numbers
+    modals = root.css('article.listing')
+    for modal in modals:
+        print(".....", i, ".....")
+        # 1. Link
+        try:
+            Link = modal.css_first("h3.listing__title a").attributes.get('href')
+        except:
+            Link = 'Link not found'
+        # 2. Name
+        try:
+            Name = modal.css_first("h3.listing__title span").text()
+        except:
+            Name = 'Name not found'
+        # 3. Category
+        try:
+            Category = modal.css_first("div.listing__category").text().lstrip().rstrip()
+        except:
+            Category = 'Category not found'
+        # 4. Address, 5. State and 6.Postal Code
+        try:
+            Address = modal.css_first("div.location-addr").text()
+            # Remove the "Map" word from the string
+            Address = Address.replace("Map", "")
+            Address1 = Address.split()[:-2]
+            Address1 = ' '.join(Address1)
+            # Merge all strings into one line
+            div_tag = "".join(Address.splitlines())
+            # Remove extra spaces
+            Address = " ".join(div_tag.split())
+            strings_list = Address.split()  # split the Address by space
+            last_two_strings = strings_list[-2:]  # slice the list to get last two element
+            # 5. State
+            State = last_two_strings[0]
+            # 6. Postal Code
+            Postal_code = last_two_strings[1]
+        except:
+            Address1 = 'Address not found'
+            State = 'State not found'
+            Postal_code = "Postal Code not found"
+
+        # 7. Phone Number
+        try:
+            Phone_Number = modal.css_first("li.listing__phone-no").text().replace("Click to show phone number", "")
+        except:
+            Phone_Number = "Phone Number not found"
+
+        # 8. Website
+        try:
+            Website = modal.css_first("li.listing__website a").attributes.get('href')
+            Website = Website.replace(" ", '')
+            if Website.startswith('//'):
+                Website = 'http:' + Website
+        except:
+            Website = "Website not found"
+
+        print("Main Link:", link)
+        # 1. Link
+        print("1.Link:", Link)
+        # 2. Name
+        print("2.Name:", Name)
+        # 3. Category
+        print("3.Category:", Category)
+        # 4. Address
+        print("4.Address:", Address1)
+        # 5. State
+        print("5.State:", State)
+        # 6. Postal Code
+        print("6.Postal Code:", Postal_code)
+        # 7. Phone Number
+        print("7.Phone Number:", Phone_Number)
+        # 8. Website
+        print("8.Website:", Website)
+        output_result = [link] + [Link] + [Name] + [Category] + [Address1] + [State] + [Postal_code] + [
+            Phone_Number] + [Website]
+        write_to_file([output_result])
+    # Reset the count value
+    count = 1
+
+
+def write_to_file(rows):
+    file = open(OUTPUT_FILE_NAME, 'a', encoding='UTF8', newline="")
+    writer = csv.writer(file)
+    writer.writerows(rows)
+    file.close()
+
+
+if __name__ == '__main__':
+    # Run Scraper
+    driver = configure_driver()
+    RunScrapper()
+    # close the driver.
+    # driver.close()
